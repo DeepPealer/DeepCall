@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
+import toast from 'react-hot-toast';
 import api from '../api/axios';
 import { KeyRound, Mail, Sparkles } from 'lucide-react';
 
 export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
@@ -31,12 +31,15 @@ export default function Login() {
       localStorage.setItem('username', email.split('@')[0]); // Temporary
       localStorage.setItem('email', email);
       
-      console.log("Login successful");
+      toast.success("Welcome back!", {
+        icon: '👋',
+      });
       navigate('/app');
     } catch (err) {
       console.error("Login error:", err);
       const detail = err.response?.data?.detail;
-      setError(typeof detail === 'string' ? detail : 'Invalid credentials');
+      const message = typeof detail === 'string' ? detail : 'Invalid credentials';
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -75,16 +78,6 @@ export default function Login() {
           <h2 className="text-4xl font-bold text-white">Welcome Back</h2>
         </div>
         <p className="text-center text-gray-400 mb-8">Sign in to DeepCall</p>
-        
-        {error && (
-          <motion.div 
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="alert alert-error mb-4 bg-red-500/20 border-red-500/50"
-          >
-            <span>{error}</span>
-          </motion.div>
-        )}
         
         <form onSubmit={handleLogin} className="space-y-5">
           <div className="form-control">

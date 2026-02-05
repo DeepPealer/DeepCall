@@ -9,6 +9,7 @@ from app.core import security
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.models.user import User
+from app.models.message import Message
 from app.schemas import auth as auth_schemas
 
 router = APIRouter()
@@ -44,11 +45,27 @@ async def websocket_endpoint(
                 data = await websocket.receive_json()
                 # Handle incoming messages
                 if "channel_id" in data and "content" in data:
-                    await manager.broadcast_to_channel(data["channel_id"], {
-                        "type": "message",
-                        "user": user.username,
-                        "content": data["content"]
-                    })
+                    # Save message to database
+                    import uuid as uuid_lib
+                    try:
+                        channel_uuid = uuid_lib.UUID(data["channel_id"])
+                        new_msg = Message(
+                            content=data["content"],
+                            channel_id=channel_uuid,
+                            user_id=user.id
+                        )
+                        db.add(new_msg)
+                        await db.commit()
+                        
+                        await manager.broadcast_to_channel(data["channel_id"], {
+                            "type": "message",
+                            "user": user.username,
+                            "content": data["content"],
+                            "channel_id": data["channel_id"],
+                            "created_at": new_msg.created_at.isoformat() if new_msg.created_at else None
+                        })
+                    except Exception as e:
+                        print(f"Error saving message: {e}")
         except WebSocketDisconnect:
             manager.disconnect(websocket, str(user.id))
         except Exception as e:

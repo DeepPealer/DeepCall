@@ -3,13 +3,22 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { UserPlus, Check, X, Users } from 'lucide-react';
 import api from '../api/axios';
 
-export default function FriendList({ onSelectFriend }) {
+export default function FriendList({ onSelectFriend, onHoverUser }) {
   const [friends, setFriends] = useState([]);
   const [pending, setPending] = useState([]);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  const handleMouseEnter = (e, friend) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    onHoverUser && onHoverUser(friend, { top: rect.top, left: rect.right });
+  };
+
+  const handleMouseLeave = () => {
+    onHoverUser && onHoverUser(null);
+  };
 
   useEffect(() => {
     loadFriends();
@@ -95,9 +104,16 @@ export default function FriendList({ onSelectFriend }) {
           <h3 className="text-sm font-semibold text-yellow-500 mb-2">Pending Requests ({pending.length})</h3>
           <div className="space-y-2">
             {pending.map(p => (
-              <div key={p.id} className="flex items-center justify-between glass-card p-2 rounded-lg">
-                <span className="text-white text-sm">{p.username}</span>
-                <div className="flex gap-1">
+              <div key={p.id} className="flex items-center justify-between glass-card p-2 rounded-lg gap-3">
+                <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0 overflow-hidden border border-white/5">
+                  {p.avatar_url ? (
+                    <img src={p.avatar_url} alt={p.username} className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-primary text-xs font-bold">{p.username[0].toUpperCase()}</span>
+                  )}
+                </div>
+                <span className="text-white text-sm flex-1 truncate font-medium">{p.username}</span>
+                <div className="flex gap-1 shrink-0">
                   <button onClick={() => acceptRequest(p.id)} className="btn btn-xs btn-success">
                     <Check size={14} />
                   </button>
@@ -112,23 +128,36 @@ export default function FriendList({ onSelectFriend }) {
       )}
 
       {/* Friends List */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-2">
+      <div className="flex-1 overflow-y-auto p-3 space-y-2 relative custom-scrollbar">
         {friends.map(friend => (
-          <motion.button
+          <motion.div
             key={friend.id}
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
-            onClick={() => onSelectFriend && onSelectFriend(friend)}
-            className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-white/5 transition-colors text-left"
+            onMouseEnter={(e) => handleMouseEnter(e, friend)}
+            onMouseLeave={handleMouseLeave}
+            className="group"
           >
-            <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center">
-              <span className="text-primary font-bold">{friend.username[0].toUpperCase()}</span>
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="font-semibold text-white truncate">{friend.username}</div>
-              <div className="text-xs text-gray-400">Online</div>
-            </div>
-          </motion.button>
+            <button
+              onClick={() => onSelectFriend && onSelectFriend(friend)}
+              className="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-white/5 transition-all text-left border border-transparent hover:border-white/5"
+            >
+              <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center shrink-0 overflow-hidden border border-white/5 shadow-inner">
+                {friend.avatar_url ? (
+                  <img src={friend.avatar_url} alt={friend.username} className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-primary font-black">{(friend.username || '?')[0].toUpperCase()}</span>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="font-bold text-white truncate text-sm">{friend.username}</div>
+                <div className="text-[10px] text-emerald-500 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                   <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
+                   Online
+                </div>
+              </div>
+            </button>
+          </motion.div>
         ))}
         {friends.length === 0 && pending.length === 0 && (
           <div className="text-center text-gray-500 py-8">

@@ -11,6 +11,7 @@ class FriendResponse(BaseModel):
     username: str
     email: str
     avatar_url: Optional[str]
+    bio: Optional[str]
     status: str  # PENDING, ACCEPTED
     created_at: datetime
 

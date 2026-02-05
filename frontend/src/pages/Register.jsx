@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
+import toast from 'react-hot-toast';
 import api from '../api/axios';
 import { User, KeyRound, Mail, Sparkles } from 'lucide-react';
 
@@ -8,7 +9,6 @@ export default function Register() {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
@@ -21,12 +21,13 @@ export default function Register() {
         username,
         password
       });
-      console.log("Registration successful", response.data);
+      toast.success("Account created! Please log in.");
       navigate('/login');
     } catch (err) {
       console.error("Registration error:", err);
       const detail = err.response?.data?.detail;
-      setError(typeof detail === 'string' ? detail : JSON.stringify(detail) || 'Registration failed');
+      const message = typeof detail === 'string' ? detail : JSON.stringify(detail) || 'Registration failed';
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -65,16 +66,6 @@ export default function Register() {
           <h2 className="text-4xl font-bold text-white">DeepCall</h2>
         </div>
         <p className="text-center text-gray-400 mb-8">Create your account</p>
-        
-        {error && (
-          <motion.div 
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="alert alert-error mb-4 bg-red-500/20 border-red-500/50"
-          >
-            <span>{error}</span>
-          </motion.div>
-        )}
         
         <form onSubmit={handleRegister} className="space-y-5">
           <div className="form-control">

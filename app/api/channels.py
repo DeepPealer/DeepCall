@@ -7,6 +7,9 @@ from app.api import deps
 from app.core import config
 from app.core.database import get_db
 from app.models.user import User
+from app.models.message import Message
+from app.models.server import Channel
+from sqlalchemy import select
 
 router = APIRouter()
 
@@ -57,3 +60,33 @@ async def list_channels(
     
     # Return simple list for MVP
     return [{"id": str(c.id), "name": c.name, "type": c.type} for c in channels]
+
+@router.get("/{channel_id}/messages")
+async def get_channel_messages(
+    channel_id: str,
+    current_user: User = Depends(deps.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get messages for a specific channel
+    """
+    import uuid as uuid_lib
+    try:
+        channel_uuid = uuid_lib.UUID(channel_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid channel ID")
+
+    result = await db.execute(
+        select(Message)
+        .where(Message.channel_id == channel_uuid)
+        .order_by(Message.created_at.asc())
+    )
+    messages = result.scalars().all()
+    
+    return [{
+        "id": str(m.id),
+        "content": m.content,
+        "user": m.user.username if m.user else "Unknown",
+        "user_id": str(m.user_id),
+        "created_at": m.created_at.isoformat() if m.created_at else None
+    } for m in messages]

@@ -120,8 +120,12 @@ export default function DMChat({ friend, onBack }) {
           <ArrowLeft size={20} />
         </button>
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-xl bg-primary/20 flex items-center justify-center font-bold text-primary">
-            {friend.username ? friend.username[0].toUpperCase() : '?'}
+          <div className="w-8 h-8 rounded-xl bg-primary/20 flex items-center justify-center font-bold text-primary overflow-hidden border border-white/5">
+            {friend.avatar_url ? (
+               <img src={friend.avatar_url} alt={friend.username} className="w-full h-full object-cover" />
+            ) : (
+               friend.username ? friend.username[0].toUpperCase() : '?'
+            )}
           </div>
           <h3 className="font-bold text-white tracking-tight">{friend.username}</h3>
           <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" />

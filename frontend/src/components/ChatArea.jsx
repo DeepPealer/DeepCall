@@ -8,19 +8,24 @@ const WS_URL = 'ws://localhost:8002/ws';
 export default function ChatArea({ channel }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(true);
   const messagesEndRef = useRef(null);
   const ws = useRef(null);
 
   useEffect(() => {
-    setMessages([]); // Reset on channel change
+    loadMessages();
     const token = localStorage.getItem('token');
     if (token) {
         const socket = new WebSocket(`${WS_URL}?token=${token}`);
         ws.current = socket;
         socket.onmessage = (event) => {
             const data = JSON.parse(event.data);
-            if (data.type === 'message' || data.channel_id === channel.id) {
-                setMessages(prev => [...prev, data]);
+            // Ensure message belongs to current channel and we don't have it yet (if broadcast comes after POST)
+            if (data.channel_id === channel.id || data.type === 'message') {
+                setMessages(prev => {
+                    if (prev.some(m => m.id === data.id)) return prev;
+                    return [...prev, data];
+                });
             }
         };
     }
@@ -28,6 +33,19 @@ export default function ChatArea({ channel }) {
         if (ws.current) ws.current.close();
     };
   }, [channel.id]);
+
+  const loadMessages = async () => {
+    setLoading(true);
+    setMessages([]);
+    try {
+      const res = await api.get(`/channels/${channel.id}/messages`);
+      setMessages(res.data);
+    } catch (err) {
+      console.error('History load fail:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -48,20 +66,23 @@ export default function ChatArea({ channel }) {
     <div className="flex flex-col h-full w-full overflow-hidden bg-transparent">
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto p-6 space-y-2 custom-scrollbar min-h-0 w-full">
-        {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full opacity-30 select-none">
-             <div className="w-20 h-20 rounded-3xl bg-surface-700 flex items-center justify-center mb-4">
-                <Hash size={40} />
-             </div>
-             <h3 className="text-2xl font-black">Welcome to #{channel.name}</h3>
-             <p className="text-sm">This is the start of the #{channel.name} channel.</p>
-          </div>
+        {loading ? (
+           <div className="flex items-center justify-center h-full opacity-50 font-bold text-xs uppercase tracking-widest">Loading History...</div>
+        ) : messages.length === 0 ? (
+           <div className="flex flex-col items-center justify-center h-full opacity-30 select-none">
+              <div className="w-20 h-20 rounded-3xl bg-surface-700 flex items-center justify-center mb-4">
+                 <Hash size={40} />
+              </div>
+              <h3 className="text-2xl font-black">Welcome to #{channel.name}</h3>
+              <p className="text-sm">This is the start of the #{channel.name} channel.</p>
+           </div>
         ) : (
           messages.map((msg, i) => {
             const showHeader = i === 0 || messages[i-1].user !== msg.user;
+            const msgTime = new Date(msg.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             return (
               <motion.div 
-                key={i} 
+                key={msg.id || i} 
                 initial={{ opacity: 0, x: -5 }} animate={{ opacity: 1, x: 0 }}
                 className={`group flex items-start px-4 -mx-4 py-1 hover:bg-white/5 transition-colors ${showHeader ? 'mt-4' : 'mt-0'}`}
               >
@@ -71,7 +92,7 @@ export default function ChatArea({ channel }) {
                    </div>
                 ) : (
                    <div className="w-10 mr-4 shrink-0 text-[10px] text-gray-500 opacity-0 group-hover:opacity-100 flex items-center justify-center pt-1.5 select-none font-bold">
-                      {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {msgTime}
                    </div>
                 )}
                 <div className="flex-1 min-w-0">

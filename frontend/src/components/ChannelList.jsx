@@ -67,20 +67,6 @@ export default function ChannelList({ activeServer, activeChannel, setActiveChan
                 ))}
             </div>
 
-            <div className="mt-auto p-2 bg-surface-900/50 border-t border-white/5">
-                <div className="flex items-center gap-2 p-1.5 rounded-xl hover:bg-white/5 transition-colors group">
-                    <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center shrink-0">
-                        <span className="text-[10px] font-bold text-primary">{(localStorage.getItem('username') || 'U')[0].toUpperCase()}</span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                        <div className="text-xs font-bold text-white truncate">{localStorage.getItem('username') || 'User'}</div>
-                        <div className="text-[9px] text-gray-500 font-bold uppercase tracking-tighter">Online</div>
-                    </div>
-                    <div className="flex gap-1">
-                        <Settings size={14} className="text-gray-500 hover:text-white transition-colors cursor-pointer" onClick={() => window.location.href = '/settings'} />
-                    </div>
-                </div>
-            </div>
         </div>
     );
 }

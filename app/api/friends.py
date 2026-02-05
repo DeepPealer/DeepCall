@@ -78,6 +78,7 @@ async def list_friends(
                 username=friend.username,
                 email=friend.email,
                 avatar_url=friend.avatar_url,
+                bio=friend.bio,
                 status="ACCEPTED",
                 created_at=fs.created_at
             ))
@@ -110,6 +111,7 @@ async def list_pending_requests(
                 username=requester.username,
                 email=requester.email,
                 avatar_url=requester.avatar_url,
+                bio=requester.bio,
                 status="PENDING",
                 created_at=fs.created_at
             ))
