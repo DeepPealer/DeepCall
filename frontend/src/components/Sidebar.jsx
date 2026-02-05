@@ -23,11 +23,19 @@ export default function Sidebar({ servers = [], activeServer, setActiveServer, o
                                 : 'bg-surface-700 hover:bg-primary rounded-3xl hover:rounded-[14px]'
                             }`}
                         >
-                            <span className={`font-bold transition-colors duration-300 ${
-                                isActive ? 'text-white' : 'text-gray-400 group-hover:text-white'
-                            }`}>
-                                {(server?.name || '?').charAt(0).toUpperCase()}
-                            </span>
+                            {server?.icon_url ? (
+                                <img 
+                                    src={server.icon_url} 
+                                    alt={server.name} 
+                                    className="w-full h-full object-cover"
+                                />
+                            ) : (
+                                <span className={`font-bold transition-colors duration-300 ${
+                                    isActive ? 'text-white' : 'text-gray-400 group-hover:text-white'
+                                }`}>
+                                    {(server?.name || '?').charAt(0).toUpperCase()}
+                                </span>
+                            )}
                         </motion.button>
                         
                         {/* Indicator */}

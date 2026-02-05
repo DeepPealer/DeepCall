@@ -86,17 +86,27 @@ async def get_dm_history(
     if not await check_are_friends(str(current_user.id), user_id, db):
         raise HTTPException(status_code=403, detail="You must be friends to view messages")
     
+    from sqlalchemy.orm import selectinload
     result = await db.execute(
         select(DirectMessage).where(
             or_(
                 and_(DirectMessage.sender_id == current_user.id, DirectMessage.recipient_id == user_id),
                 and_(DirectMessage.sender_id == user_id, DirectMessage.recipient_id == current_user.id)
             )
-        ).order_by(DirectMessage.created_at.asc())
+        )
+        .options(selectinload(DirectMessage.sender))
+        .order_by(DirectMessage.created_at.asc())
     )
     messages = result.scalars().all()
     
-    return messages
+    # Map to include avatar
+    response = []
+    for m in messages:
+        m_dict = jsonable_encoder(m)
+        m_dict["sender_avatar"] = m.sender.avatar_url if m.sender else None
+        response.append(m_dict)
+    
+    return response
 
 @router.post("/{user_id}", response_model=DirectMessageResponse, status_code=status.HTTP_201_CREATED)
 async def send_dm(
@@ -116,7 +126,8 @@ async def send_dm(
     dm = DirectMessage(
         sender_id=current_user.id,
         recipient_id=recipient_uuid,
-        content=message.content
+        content=message.content,
+        reply_to_id=message.reply_to_id
     )
     db.add(dm)
     await db.commit()
@@ -131,10 +142,13 @@ async def send_dm(
         
         ws_message = {
             "type": "dm",
+            "id": str(dm.id),
             "sender_id": str(current_user.id),
             "recipient_id": str(user_id),
             "content": dm.content,
             "user": current_user.username,
+            "sender_avatar": current_user.avatar_url,
+            "reply_to_id": str(dm.reply_to_id) if dm.reply_to_id else None,
             "created_at": created_at_iso
         }
         
@@ -147,5 +161,82 @@ async def send_dm(
     except Exception as e:
         print(f"CRITICAL DM BROADCAST ERROR: {e}")
         # We don't want to fail the whole request if WS broadcast fails
+            
+    res = jsonable_encoder(dm)
+    res["sender_avatar"] = current_user.avatar_url
+    return res
+
+@router.patch("/message/{message_id}", response_model=DirectMessageResponse)
+async def edit_dm(
+    message_id: str,
+    message_update: DirectMessageCreate,
+    current_user: User = Depends(deps.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Edit a message sent by the user"""
+    import uuid
+    msg_uuid = uuid.UUID(message_id)
+    
+    result = await db.execute(select(DirectMessage).where(DirectMessage.id == msg_uuid))
+    dm = result.scalars().first()
+    
+    if not dm:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if dm.sender_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only edit your own messages")
+    
+    dm.content = message_update.content
+    dm.is_edited = True
+    await db.commit()
+    await db.refresh(dm)
+    
+    # Broadcast update
+    update_payload = jsonable_encoder({
+        "type": "dm_update",
+        "id": str(dm.id),
+        "content": dm.content,
+        "is_edited": True,
+        "recipient_id": str(dm.recipient_id),
+        "sender_id": str(dm.sender_id)
+    })
+    await manager.send_personal_message(update_payload, str(dm.recipient_id))
+    await manager.send_personal_message(update_payload, str(dm.sender_id))
     
     return dm
+
+@router.delete("/message/{message_id}")
+async def delete_dm(
+    message_id: str,
+    current_user: User = Depends(deps.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete a message sent by the user"""
+    import uuid
+    msg_uuid = uuid.UUID(message_id)
+    
+    result = await db.execute(select(DirectMessage).where(DirectMessage.id == msg_uuid))
+    dm = result.scalars().first()
+    
+    if not dm:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if dm.sender_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only delete your own messages")
+    
+    recipient_id = str(dm.recipient_id)
+    sender_id = str(dm.sender_id)
+    msg_id = str(dm.id)
+    
+    await db.delete(dm)
+    await db.commit()
+    
+    # Broadcast deletion
+    delete_payload = jsonable_encoder({
+        "type": "dm_delete",
+        "id": msg_id,
+        "recipient_id": recipient_id,
+        "sender_id": sender_id
+    })
+    await manager.send_personal_message(delete_payload, recipient_id)
+    await manager.send_personal_message(delete_payload, sender_id)
+    
+    return {"status": "success"}

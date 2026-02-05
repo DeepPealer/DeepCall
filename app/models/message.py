@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, ForeignKey, DateTime, Text
+from sqlalchemy import Column, String, ForeignKey, DateTime, Text, Boolean
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -12,6 +12,9 @@ class Message(Base):
     content = Column(Text, nullable=False)
     channel_id = Column(UUID(as_uuid=True), ForeignKey("channels.id"), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    attachments = Column(Text, nullable=True) # JSON string for now to avoid complexity, or JSONB if preferred
+    reply_to_id = Column(UUID(as_uuid=True), ForeignKey("messages.id", ondelete='SET NULL'), nullable=True)
+    is_edited = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

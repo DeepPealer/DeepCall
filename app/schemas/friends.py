@@ -20,12 +20,15 @@ class FriendResponse(BaseModel):
 
 class DirectMessageCreate(BaseModel):
     content: str
+    reply_to_id: Optional[uuid.UUID] = None
 
 class DirectMessageResponse(BaseModel):
     id: uuid.UUID
     sender_id: uuid.UUID
     recipient_id: uuid.UUID
     content: str
+    reply_to_id: Optional[uuid.UUID] = None
+    sender_avatar: Optional[str] = None
     created_at: datetime
 
     class Config:

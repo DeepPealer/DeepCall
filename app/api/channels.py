@@ -59,7 +59,7 @@ async def list_channels(
     channels = result.scalars().all()
     
     # Return simple list for MVP
-    return [{"id": str(c.id), "name": c.name, "type": c.type} for c in channels]
+    return [{"id": str(c.id), "name": c.name, "type": c.type, "server_id": str(c.server_id)} for c in channels]
 
 @router.get("/{channel_id}/messages")
 async def get_channel_messages(
@@ -76,9 +76,11 @@ async def get_channel_messages(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid channel ID")
 
+    from sqlalchemy.orm import selectinload
     result = await db.execute(
         select(Message)
         .where(Message.channel_id == channel_uuid)
+        .options(selectinload(Message.user))
         .order_by(Message.created_at.asc())
     )
     messages = result.scalars().all()
@@ -88,5 +90,75 @@ async def get_channel_messages(
         "content": m.content,
         "user": m.user.username if m.user else "Unknown",
         "user_id": str(m.user_id),
+        "user_avatar": m.user.avatar_url if m.user else None,
+        "reply_to_id": str(m.reply_to_id) if m.reply_to_id else None,
         "created_at": m.created_at.isoformat() if m.created_at else None
     } for m in messages]
+
+@router.patch("/message/{message_id}")
+async def edit_channel_message(
+    message_id: str,
+    content: str, # For simplicity, just send content
+    current_user: User = Depends(deps.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Edit a message in a channel"""
+    import uuid
+    msg_uuid = uuid.UUID(message_id)
+    
+    result = await db.execute(select(Message).where(Message.id == msg_uuid))
+    msg = result.scalars().first()
+    
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if msg.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only edit your own messages")
+    
+    msg.content = content
+    msg.is_edited = True
+    await db.commit()
+    await db.refresh(msg)
+    
+    # Broadcast to channel
+    await manager.broadcast_to_channel(str(msg.channel_id), {
+        "type": "message_update",
+        "id": str(msg.id),
+        "content": msg.content,
+        "is_edited": True,
+        "channel_id": str(msg.channel_id)
+    })
+    
+    return {"status": "success"}
+
+@router.delete("/message/{message_id}")
+async def delete_channel_message(
+    message_id: str,
+    current_user: User = Depends(deps.get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete a message in a channel"""
+    import uuid
+    msg_uuid = uuid.UUID(message_id)
+    
+    result = await db.execute(select(Message).where(Message.id == msg_uuid))
+    msg = result.scalars().first()
+    
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if msg.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only delete your own messages")
+    
+    channel_id = str(msg.channel_id)
+    msg_id = str(msg.id)
+    
+    await db.delete(msg)
+    await db.commit()
+    
+    # Broadcast deletion
+    await manager.broadcast_to_channel(channel_id, {
+        "type": "message_delete",
+        "id": msg_id,
+        "channel_id": channel_id
+    })
+    
+    return {"status": "success"}

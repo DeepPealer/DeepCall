@@ -5,6 +5,7 @@ import { Toaster } from 'react-hot-toast'
 import Login from './pages/Login.jsx'
 import Register from './pages/Register.jsx'
 import Dashboard from './pages/Dashboard.jsx'
+import InvitePage from './pages/InvitePage.jsx'
 import './index.css'
 
 // Robust Error Boundary
@@ -66,6 +67,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/invite/:code" element={<InvitePage />} />
           <Route path="/app/*" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
           <Route path="/" element={<Navigate to="/app" replace />} />
         </Routes>

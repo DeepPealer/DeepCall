@@ -25,11 +25,15 @@ export default function Login() {
       
       localStorage.setItem('token', response.data.access_token);
       
-      // Decode token to get user_id
-      const payload = JSON.parse(atob(response.data.access_token.split('.')[1]));
-      localStorage.setItem('user_id', payload.sub);
-      localStorage.setItem('username', email.split('@')[0]); // Temporary
-      localStorage.setItem('email', email);
+      const userData = response.data.user;
+      localStorage.setItem('user_id', userData.id);
+      localStorage.setItem('username', userData.username);
+      localStorage.setItem('email', userData.email);
+      if (userData.avatar_url) {
+        localStorage.setItem('user_avatar', userData.avatar_url);
+      } else {
+        localStorage.removeItem('user_avatar');
+      }
       
       toast.success("Welcome back!", {
         icon: '👋',

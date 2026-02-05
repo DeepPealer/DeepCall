@@ -12,7 +12,12 @@ import ChatArea from '../components/ChatArea';
 import VoiceArea from '../components/VoiceArea';
 import FriendList from '../components/FriendList';
 import DMChat from '../components/DMChat';
+import CallOverlay from '../components/CallOverlay';
+import CreateJoinServerModal from '../components/CreateJoinServerModal';
+import InviteModal from '../components/InviteModal';
+import ServerSettingsModal from '../components/ServerSettingsModal';
 import api from '../api/axios';
+import { useRef } from 'react';
 
 export default function Dashboard() {
   const [servers, setServers] = useState([]);
@@ -24,9 +29,10 @@ export default function Dashboard() {
 
   const [showCreateServerDialog, setShowCreateServerDialog] = useState(false);
   const [showCreateChannelDialog, setShowCreateChannelDialog] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [showServerSettings, setShowServerSettings] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   
-  const [serverName, setServerName] = useState('');
   const [channelName, setChannelName] = useState('');
   const [channelType, setChannelType] = useState('TEXT');
   const [loading, setLoading] = useState(false);
@@ -48,9 +54,116 @@ export default function Dashboard() {
   const [hoveredUser, setHoveredUser] = useState(null);
   const [popoverPos, setPopoverPos] = useState({ top: 0, left: 0 });
 
+  // Global WebSocket and Call state
+  const ws = useRef(null);
+  const [callState, setCallState] = useState('idle'); // 'idle' | 'incoming' | 'outgoing' | 'connected'
+  const [callType, setCallType] = useState('video');
+  const [roomName, setRoomName] = useState(null);
+  const [incomingCallData, setIncomingCallData] = useState(null);
+  const [callFriend, setCallFriend] = useState(null); // The friend object for calling
+  
+  // Hands for child components - Use ref to avoid WS reconnects on register
+  const handlersRef = useRef(new Set());
+  const [wsStatus, setWsStatus] = useState('connecting'); // 'connecting' | 'open' | 'closed'
+
+  const connectWebSocket = () => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+
+    if (ws.current) ws.current.close();
+
+    setWsStatus('connecting');
+    const socket = new WebSocket(`ws://localhost:8002/ws?token=${token}`);
+    ws.current = socket;
+
+    socket.onopen = () => {
+      console.log('Global WS Connected');
+      setWsStatus('open');
+    };
+
+    socket.onclose = () => {
+      console.log('Global WS Closed');
+      setWsStatus('closed');
+      // Reconnect after 3 seconds
+      setTimeout(connectWebSocket, 3000);
+    };
+
+    socket.onerror = (err) => {
+      console.error('Global WS Error:', err);
+      setWsStatus('closed');
+    };
+
+    socket.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      console.log('DEBUG: Global WS Received', data);
+      
+      const myId = localStorage.getItem('user_id');
+      console.log('DEBUG: current user_id', myId);
+
+      if (data.type === 'pong') {
+         console.log('DEBUG: Received Pong');
+         return;
+      }
+      
+      // Handle call signaling globally
+      if (data.type === 'call_invite') {
+         console.log('DEBUG: Processing call_invite', data);
+         if (String(data.from_user_id) === String(myId)) {
+            console.log('DEBUG: Received self-invite, skipping');
+            return;
+         }
+         
+         setIncomingCallData(data);
+         setRoomName(data.room_name);
+         setCallType(data.call_type || 'video');
+         setCallState('incoming');
+         setCallFriend({
+           id: data.from_user_id,
+           username: data.from_username,
+           avatar_url: data.from_avatar
+         });
+      } else if (data.type === 'call_accept') {
+         console.log('DEBUG: Processing call_accept', data);
+         if (String(data.from_user_id) === String(myId)) return;
+         setCallState('connected');
+         toast.success("Call accepted!");
+      } else if (data.type === 'call_reject' || data.type === 'call_end') {
+         console.log('DEBUG: Processing call_reject/end', data);
+         if (String(data.from_user_id) === String(myId)) return;
+         const wasConnected = callState === 'connected';
+         setCallState('idle');
+         setRoomName(null);
+         setIncomingCallData(null);
+         setCallFriend(null);
+         if (data.type === 'call_reject') toast.error("Call rejected");
+         else if (wasConnected) toast.error("Call ended");
+      } else {
+         handlersRef.current.forEach(handler => handler(data));
+      }
+    };
+  };
+
+  // Heartbeat to keep connection alive and test bi-directional
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (ws.current?.readyState === WebSocket.OPEN) {
+        ws.current.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, 30000);
+    return () => clearInterval(timer);
+  }, []);
+
   useEffect(() => {
     loadServers();
     loadUser();
+    connectWebSocket();
+
+    return () => {
+      if (ws.current) {
+        ws.current.onclose = null; // Prevent reconnect on unmount
+        ws.current.close();
+      }
+    };
   }, []);
 
   const loadUser = async () => {
@@ -120,23 +233,7 @@ export default function Dashboard() {
     }
   };
 
-  const handleCreateServer = async (e) => {
-    e.preventDefault();
-    if (!serverName.trim()) return;
-    setLoading(true);
-    try {
-      await api.post('/servers/', { name: serverName });
-      toast.success(`Server "${serverName}" created!`);
-      setServerName('');
-      setShowCreateServerDialog(false);
-      await loadServers();
-    } catch (err) {
-      console.error('Server create fail:', err);
-      toast.error("Failed to create server");
-    } finally {
-      setLoading(false);
-    }
-  };
+  // handleCreateServer removed (moved to modal)
 
   const handleCreateChannel = async (e) => {
     e.preventDefault();
@@ -162,6 +259,95 @@ export default function Dashboard() {
   const handleLogout = () => {
     localStorage.clear();
     window.location.href = '/login';
+  };
+
+  // Call Handlers
+  const startCall = (friend, type) => {
+    console.log('DEBUG: startCall initiated', { friend, type, wsStatus: wsStatus });
+    if (!friend || !friend.id) {
+      toast.error("Cannot start call: invalid friend data");
+      return;
+    }
+    
+    if (wsStatus !== 'open') {
+      toast.error("Signaling bridge is not connected. Trying to reconnect...");
+      connectWebSocket();
+      return;
+    }
+
+    const room = `dm-${friend.id}-${Date.now()}`;
+    setRoomName(room);
+    setCallType(type);
+    setCallFriend(friend); // The person we are calling
+    setCallState('outgoing');
+    
+    if (ws.current?.readyState === WebSocket.OPEN) {
+      const payload = {
+        type: 'call_invite',
+        target_user_id: String(friend.id),
+        room_name: room,
+        call_type: type
+      };
+      console.log('DEBUG: Sending call_invite', payload);
+      ws.current.send(JSON.stringify(payload));
+      toast.success(`Calling ${friend.username}...`);
+    } else {
+      console.error('DEBUG: WS not open in startCall', ws.current?.readyState);
+      toast.error("WebSocket connection lost");
+    }
+  };
+
+  const acceptCall = () => {
+    setCallState('connected');
+    if (ws.current?.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({
+        type: 'call_accept',
+        target_user_id: incomingCallData?.from_user_id,
+        room_name: roomName
+      }));
+    }
+  };
+
+  const rejectCall = () => {
+    if (ws.current?.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({
+        type: 'call_reject',
+        target_user_id: incomingCallData?.from_user_id,
+        room_name: roomName
+      }));
+    }
+    setCallState('idle');
+    setRoomName(null);
+    setIncomingCallData(null);
+    setCallFriend(null);
+  };
+
+  const endCall = () => {
+    if (ws.current?.readyState === WebSocket.OPEN) {
+      const targetId = callState === 'incoming' 
+        ? incomingCallData?.from_user_id 
+        : (callFriend?.id || selectedFriend?.id);
+      
+      if (targetId) {
+        ws.current.send(JSON.stringify({
+          type: 'call_end',
+          target_user_id: targetId,
+          room_name: roomName
+        }));
+      }
+    }
+    setCallState('idle');
+    setRoomName(null);
+    setIncomingCallData(null);
+    setCallFriend(null);
+  };
+
+  const registerMessageHandler = (handler) => {
+    handlersRef.current.add(handler);
+  };
+
+  const unregisterMessageHandler = (handler) => {
+    handlersRef.current.delete(handler);
   };
 
   return (
@@ -204,6 +390,14 @@ export default function Dashboard() {
                     activeChannel={activeChannel} 
                     setActiveChannel={setActiveChannel} 
                     onOpenCreateChannel={() => setShowCreateChannelDialog(true)}
+                    onOpenInvite={() => setShowInviteModal(true)}
+                    onOpenServerSettings={() => setShowServerSettings(true)}
+                    onLeaveServer={() => {
+                        loadServers();
+                        setActiveServer(null);
+                        setActiveChannel(null);
+                        setViewMode('friends');
+                    }}
                   />
                 ) : (
                   <div className="p-8 text-center text-gray-600 font-bold text-sm">LOADING...</div>
@@ -227,7 +421,12 @@ export default function Dashboard() {
               </div>
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-bold text-white truncate">{user?.username}</div>
-                <div className="text-[10px] text-gray-500 font-bold uppercase truncate">Online</div>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                   <div className={`w-1.5 h-1.5 rounded-full ${wsStatus === 'open' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : wsStatus === 'connecting' ? 'bg-amber-500 animate-pulse' : 'bg-red-500'} `} />
+                   <span className="text-[9px] font-black uppercase text-gray-500 tracking-widest">
+                     {wsStatus === 'open' ? 'Online' : wsStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
+                   </span>
+                </div>
               </div>
               <button 
                 onClick={() => setShowSettings(true)}
@@ -252,7 +451,12 @@ export default function Dashboard() {
                       <h1 className="font-bold text-white tracking-tight truncate">{activeChannel.name}</h1>
                     </header>
                     <div className="flex-1 min-h-0">
-                        <ChatArea channel={activeChannel} />
+                        <ChatArea 
+                          channel={activeChannel} 
+                          globalWs={ws.current}
+                          registerMessageHandler={registerMessageHandler}
+                          unregisterMessageHandler={unregisterMessageHandler}
+                        />
                     </div>
                   </motion.div>
                 ) : viewMode === 'friends' && selectedFriend ? (
@@ -261,7 +465,14 @@ export default function Dashboard() {
                     initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                     className="flex-1 flex flex-col min-h-0 h-full"
                   >
-                    <DMChat friend={selectedFriend} onBack={() => setSelectedFriend(null)} />
+                    <DMChat 
+                      friend={selectedFriend} 
+                      onBack={() => setSelectedFriend(null)} 
+                      globalWs={ws.current}
+                      onStartCall={startCall}
+                      registerMessageHandler={registerMessageHandler}
+                      unregisterMessageHandler={unregisterMessageHandler}
+                    />
                   </motion.div>
                 ) : (
                   <motion.div 
@@ -555,25 +766,33 @@ export default function Dashboard() {
         )}
 
         {showCreateServerDialog && (
-          <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-             <div className="glass-card w-full max-w-sm p-10 rounded-3xl">
-                <h3 className="text-2xl font-black text-white mb-6">Create Server</h3>
-                <form onSubmit={handleCreateServer}>
-                    <input
-                        type="text"
-                        value={serverName}
-                        onChange={(e) => setServerName(e.target.value)}
-                        placeholder="Server Name"
-                        className="w-full bg-black/40 text-white rounded-xl px-4 py-4 mb-6 border border-white/5 focus:border-primary focus:outline-none"
-                    />
-                    <div className="flex gap-4">
-                        <button type="submit" className="flex-1 bg-primary py-4 rounded-xl font-bold">CREATE</button>
-                        <button type="button" onClick={() => setShowCreateServerDialog(false)} className="px-4 text-gray-500 font-bold text-sm">BACK</button>
-                    </div>
-                </form>
-             </div>
-          </div>
+          <CreateJoinServerModal 
+            isOpen={showCreateServerDialog}
+            onClose={() => setShowCreateServerDialog(false)}
+            onServerCreated={() => {
+                loadServers();
+                setShowCreateServerDialog(false);
+            }}
+          />
         )}
+
+        <AnimatePresence>
+          {showInviteModal && activeServer && (
+            <InviteModal 
+              isOpen={showInviteModal} 
+              onClose={() => setShowInviteModal(false)}
+              server={activeServer}
+            />
+          )}
+          {showServerSettings && activeServer && (
+            <ServerSettingsModal 
+              isOpen={showServerSettings} 
+              onClose={() => setShowServerSettings(false)}
+              server={activeServer}
+              onUpdate={loadServers}
+            />
+          )}
+        </AnimatePresence>
 
         {showCreateChannelDialog && (
           <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
@@ -600,6 +819,7 @@ export default function Dashboard() {
           </div>
         )}
       </AnimatePresence>
+      
       {/* Mini Profile Popover (Global) */}
       <AnimatePresence>
         {hoveredUser && (
@@ -651,6 +871,18 @@ export default function Dashboard() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Global Call Overlay */}
+      <CallOverlay
+        callState={callState}
+        callType={callType}
+        roomName={roomName}
+        friendName={callFriend?.username || (callState === 'outgoing' ? selectedFriend?.username : 'Unknown')}
+        friendAvatar={callFriend?.avatar_url || (callState === 'outgoing' ? selectedFriend?.avatar_url : null)}
+        onAccept={acceptCall}
+        onReject={rejectCall}
+        onEnd={endCall}
+      />
     </div>
   );
 }
