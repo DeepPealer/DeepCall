@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Plus, Smile, Send, Mic, X, File as FileIcon, Loader2 } from 'lucide-react';
+import { Plus, Smile, Send, Mic, X, File as FileIcon, Loader2, Square } from 'lucide-react';
 import api from '../api/axios';
 import toast from 'react-hot-toast';
 import EmojiPicker from 'emoji-picker-react';
@@ -11,6 +11,11 @@ export default function MessageComposer({ onSend, placeholder, replyingTo, onCan
   const [uploading, setUploading] = useState(false);
   const [attachments, setAttachments] = useState([]);
   const [showEmoji, setShowEmoji] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const timerRef = useRef(null);
   const textareaRef = useRef(null);
   const emojiRef = useRef(null);
 
@@ -34,8 +39,71 @@ export default function MessageComposer({ onSend, placeholder, replyingTo, onCan
       }
     }
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
   }, []);
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const file = new File([audioBlob], `voice_message_${Date.now()}.webm`, { type: 'audio/webm' });
+        stream.getTracks().forEach(track => track.stop());
+
+        // Upload and auto-send voice message
+        setUploading(true);
+        const formData = new FormData();
+        formData.append('file', file);
+        try {
+          const res = await api.post('/attachments/upload', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+          });
+          const fullUrl = `${api.defaults.baseURL}${res.data.url}`;
+          onSend(`🎤 [Voice Message](${fullUrl})`);
+        } catch (err) {
+          toast.error('Failed to send voice message');
+          console.error(err);
+        } finally {
+          setUploading(false);
+        }
+      };
+
+      recorder.start();
+      setIsRecording(true);
+      setRecordingTime(0);
+      timerRef.current = setInterval(() => {
+        setRecordingTime(prev => prev + 1);
+      }, 1000);
+    } catch (err) {
+      toast.error('Could not access microphone');
+      console.error(err);
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+  };
+
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
   const handleUpload = async (file) => {
     if (file.size > 8 * 1024 * 1024) {
@@ -92,16 +160,19 @@ export default function MessageComposer({ onSend, placeholder, replyingTo, onCan
   const handleSubmit = (e) => {
     e?.preventDefault();
     if (!text.trim() && attachments.length === 0) return;
-    
-    // Format attachments as Markdown
+
+    // Format attachments as Markdown with full URLs
     const attachmentText = attachments.map(a => {
+      const fullUrl = a.url.startsWith('http') ? a.url : `${api.defaults.baseURL}${a.url}`;
       const isImage = a.content_type?.startsWith('image') || a.url.match(/\.(jpg|jpeg|png|gif|webp)$/i);
-      if (isImage) return `\n\n![${a.filename}](${a.url})`;
-      return `\n\n📎 [${a.filename}](${a.url})`;
+      const isAudio = a.content_type?.startsWith('audio') || a.url.match(/\.(webm|ogg|mp3|wav)$/i);
+      if (isImage) return `\n\n![${a.filename}](${fullUrl})`;
+      if (isAudio) return `\n\n🎤 [${a.filename}](${fullUrl})`;
+      return `\n\n📎 [${a.filename}](${fullUrl})`;
     }).join('');
-    
+
     onSend(text.trim() + attachmentText, replyingTo?.id);
-    
+
     setText('');
     setAttachments([]);
     if (onCancelReply) onCancelReply();
@@ -115,8 +186,23 @@ export default function MessageComposer({ onSend, placeholder, replyingTo, onCan
     }
   };
 
+  const lastTypingTime = useRef(0);
+
+  const handleTextChange = (e) => {
+    const newVal = e.target.value;
+    setText(newVal);
+
+    // Throttle typing events
+    const now = Date.now();
+    if (onTyping && now - lastTypingTime.current > 2000) {
+      console.log('DEBUG: Triggering onTyping');
+      onTyping();
+      lastTypingTime.current = now;
+    }
+  };
+
   return (
-    <div 
+    <div
       className="flex flex-col w-full max-w-5xl mx-auto px-4 py-2 relative"
       onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
       onDragLeave={() => setIsDragging(false)}
@@ -125,22 +211,22 @@ export default function MessageComposer({ onSend, placeholder, replyingTo, onCan
       {/* Reply Preview */}
       <AnimatePresence>
         {replyingTo && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, y: 10, height: 0 }}
             animate={{ opacity: 1, y: 0, height: 'auto' }}
             exit={{ opacity: 0, y: 10, height: 0 }}
             className="flex items-center justify-between bg-surface-700/60 backdrop-blur-md px-4 py-2 border-l-4 border-primary rounded-t-2xl mb-[-12px] relative z-0"
           >
-             <div className="flex flex-col min-w-0">
-                <span className="text-[10px] font-black uppercase tracking-widest text-primary">Replying to {replyingTo.user}</span>
-                <p className="text-xs text-gray-400 truncate opacity-80 italic">{replyingTo.content}</p>
-             </div>
-             <button 
+            <div className="flex flex-col min-w-0">
+              <span className="text-[10px] font-black uppercase tracking-widest text-primary">Replying to {replyingTo.user}</span>
+              <p className="text-xs text-gray-400 truncate opacity-80 italic">{replyingTo.content}</p>
+            </div>
+            <button
               onClick={onCancelReply}
               className="p-1 hover:bg-white/10 rounded-full text-gray-400 hover:text-white transition-all"
-             >
-               <X size={14} />
-             </button>
+            >
+              <X size={14} />
+            </button>
           </motion.div>
         )}
       </AnimatePresence>
@@ -148,57 +234,57 @@ export default function MessageComposer({ onSend, placeholder, replyingTo, onCan
       {/* Drop Zone Overlay */}
       {isDragging && (
         <div className="absolute inset-0 z-50 bg-primary/20 backdrop-blur-sm border-2 border-dashed border-primary rounded-3xl flex items-center justify-center pointer-events-none">
-           <div className="bg-surface-800 p-4 rounded-2xl shadow-2xl flex flex-col items-center gap-2">
-              <Plus size={40} className="text-primary animate-bounce" />
-              <p className="font-black uppercase tracking-widest text-[10px]">Drop to Upload</p>
-           </div>
+          <div className="bg-surface-800 p-4 rounded-2xl shadow-2xl flex flex-col items-center gap-2">
+            <Plus size={40} className="text-primary animate-bounce" />
+            <p className="font-black uppercase tracking-widest text-[10px]">Drop to Upload</p>
+          </div>
         </div>
       )}
 
       {/* Attachments Preview */}
       {attachments.length > 0 && (
-         <div className="flex flex-wrap gap-2 mb-2 px-2">
-            {attachments.map((att, idx) => (
-               <div key={idx} className="group relative w-20 h-20 rounded-xl bg-surface-700 border border-white/5 overflow-hidden shadow-lg">
-                  {att.content_type?.startsWith('image') ? (
-                     <img src={att.url} alt="upload" className="w-full h-full object-cover" />
-                  ) : (
-                     <div className="w-full h-full flex flex-col items-center justify-center gap-1">
-                        <FileIcon size={24} className="text-gray-400" />
-                        <span className="text-[8px] font-bold text-gray-500 truncate w-full px-1 text-center">{att.filename}</span>
-                     </div>
-                  )}
-                  <button 
-                    onClick={() => setAttachments(prev => prev.filter((_, i) => i !== idx))}
-                    className="absolute top-1 right-1 p-1 bg-black/50 text-white rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    <X size={12} />
-                  </button>
-               </div>
-            ))}
-            {uploading && (
-               <div className="w-20 h-20 rounded-xl bg-surface-700/50 border border-dashed border-white/10 flex items-center justify-center">
-                  <Loader2 className="animate-spin text-primary" size={24} />
-               </div>
-            )}
-         </div>
+        <div className="flex flex-wrap gap-2 mb-2 px-2">
+          {attachments.map((att, idx) => (
+            <div key={idx} className="group relative w-20 h-20 rounded-xl bg-surface-700 border border-white/5 overflow-hidden shadow-lg">
+              {att.content_type?.startsWith('image') ? (
+                <img src={att.url.startsWith('http') ? att.url : `${api.defaults.baseURL}${att.url}`} alt="upload" className="w-full h-full object-cover" />
+              ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center gap-1">
+                  <FileIcon size={24} className="text-gray-400" />
+                  <span className="text-[8px] font-bold text-gray-500 truncate w-full px-1 text-center">{att.filename}</span>
+                </div>
+              )}
+              <button
+                onClick={() => setAttachments(prev => prev.filter((_, i) => i !== idx))}
+                className="absolute top-1 right-1 p-1 bg-black/50 text-white rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+          {uploading && (
+            <div className="w-20 h-20 rounded-xl bg-surface-700/50 border border-dashed border-white/10 flex items-center justify-center">
+              <Loader2 className="animate-spin text-primary" size={24} />
+            </div>
+          )}
+        </div>
       )}
 
       <div className="relative group flex items-end gap-3 bg-surface-700/40 border border-white/5 rounded-[24px] p-2 focus-within:border-primary/50 transition-all shadow-inner backdrop-blur-sm">
-        
+
         {/* Attachment Button */}
-        <input 
-          type="file" 
-          id="file-upload" 
-          className="hidden" 
-          multiple 
+        <input
+          type="file"
+          id="file-upload"
+          className="hidden"
+          multiple
           onChange={(e) => {
             if (e.target.files) {
               for (const file of e.target.files) handleUpload(file);
             }
           }}
         />
-        <label 
+        <label
           htmlFor="file-upload"
           title="Upload file"
           className="p-2 mb-1 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all shrink-0 cursor-pointer"
@@ -211,7 +297,7 @@ export default function MessageComposer({ onSend, placeholder, replyingTo, onCan
           ref={textareaRef}
           rows={1}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={handleTextChange}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           placeholder={placeholder || "Type a message..."}
@@ -221,7 +307,7 @@ export default function MessageComposer({ onSend, placeholder, replyingTo, onCan
         {/* Actions Group */}
         <div className="flex items-center gap-1 mb-1 pr-1">
           <div className="relative" ref={emojiRef}>
-            <button 
+            <button
               onClick={() => setShowEmoji(!showEmoji)}
               title="Emoji picker"
               className={`p-2 rounded-xl transition-all shrink-0 ${showEmoji ? 'text-yellow-400 bg-yellow-400/10' : 'text-gray-400 hover:text-yellow-400 hover:bg-yellow-400/10'}`}
@@ -230,14 +316,14 @@ export default function MessageComposer({ onSend, placeholder, replyingTo, onCan
             </button>
             <AnimatePresence>
               {showEmoji && (
-                <motion.div 
+                <motion.div
                   initial={{ opacity: 0, y: 10, scale: 0.95 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: 10, scale: 0.95 }}
                   className="absolute bottom-full right-0 mb-4 z-[100] shadow-2xl border border-white/10 rounded-2xl overflow-hidden"
                 >
-                  <EmojiPicker 
-                    theme="dark" 
+                  <EmojiPicker
+                    theme="dark"
                     onEmojiClick={onEmojiClick}
                     lazyLoadEmojis={true}
                     skinTonesDisabled
@@ -247,9 +333,22 @@ export default function MessageComposer({ onSend, placeholder, replyingTo, onCan
               )}
             </AnimatePresence>
           </div>
-          
-          {(text.trim() || attachments.length > 0) ? (
-            <button 
+
+          {isRecording ? (
+            <div className="flex items-center gap-3 pr-2">
+              <div className="flex items-center gap-2 bg-red-500/10 px-3 py-1.5 rounded-xl border border-red-500/20">
+                <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                <span className="text-[11px] font-black text-red-500 tabular-nums uppercase tracking-widest leading-none pt-0.5">{formatTime(recordingTime)}</span>
+              </div>
+              <button
+                onClick={stopRecording}
+                className="p-2 bg-red-500 text-white rounded-xl shadow-lg shadow-red-500/20 hover:scale-105 active:scale-95 transition-all"
+              >
+                <Square size={18} fill="currentColor" />
+              </button>
+            </div>
+          ) : (text.trim() || attachments.length > 0) ? (
+            <button
               onClick={handleSubmit}
               disabled={uploading}
               className="p-2 bg-primary text-white rounded-xl shadow-lg shadow-primary/20 hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:scale-100"
@@ -257,7 +356,8 @@ export default function MessageComposer({ onSend, placeholder, replyingTo, onCan
               {uploading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
             </button>
           ) : (
-            <button 
+            <button
+              onClick={startRecording}
               title="Record voice"
               className="p-2 text-gray-400 hover:text-red-400 hover:bg-red-400/10 rounded-xl transition-all"
             >
@@ -266,16 +366,16 @@ export default function MessageComposer({ onSend, placeholder, replyingTo, onCan
           )}
         </div>
       </div>
-      
+
       {/* Footer info */}
       <div className="flex justify-between items-center px-4 mt-1.5 opacity-20 group-focus-within:opacity-40 transition-opacity">
-         <p className="text-[9px] font-black uppercase tracking-widest text-gray-400">
-           Markdown Supported
-         </p>
-         <div className="flex gap-3 text-[9px] font-black uppercase tracking-widest text-gray-400">
-            <span><b>Enter</b> to send</span>
-            <span><b>Shift+Enter</b> for newline</span>
-         </div>
+        <p className="text-[9px] font-black uppercase tracking-widest text-gray-400">
+          Markdown Supported
+        </p>
+        <div className="flex gap-3 text-[9px] font-black uppercase tracking-widest text-gray-400">
+          <span><b>Enter</b> to send</span>
+          <span><b>Shift+Enter</b> for newline</span>
+        </div>
       </div>
     </div>
   );

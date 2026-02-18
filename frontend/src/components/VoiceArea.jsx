@@ -1,42 +1,100 @@
 import {
   LiveKitRoom,
-  VideoConference,
-  GridLayout,
-  ParticipantTile,
   RoomAudioRenderer,
-  ControlBar,
-  useTracks,
+  useLocalParticipant,
 } from '@livekit/components-react';
 import '@livekit/components-styles';
-import { Track } from 'livekit-client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import api from '../api/axios';
 
-export default function VoiceArea({ channel }) {
+/**
+ * Headless voice connection manager.
+ * No visible UI — all UI lives in the sidebar (ChannelList).
+ * Manages LiveKit connection, mute/deafen state, and WS signaling.
+ */
+export default function VoiceArea({ channel, onDisconnect, globalWs, onConnectionChange }) {
   const [token, setToken] = useState('');
+  const [connectionStatus, setConnectionStatus] = useState('connecting'); // connecting | connected | error
+  const intentionalDisconnect = useRef(false);
+  const user = {
+    id: localStorage.getItem('user_id'),
+    username: localStorage.getItem('username'),
+    avatar: localStorage.getItem('user_avatar')
+  };
 
   useEffect(() => {
+    let cancelled = false;
+    intentionalDisconnect.current = false;
+    setConnectionStatus('connecting');
+    onConnectionChange?.('connecting');
+
     const getToken = async () => {
       try {
         const resp = await api.post(`/channels/${channel.id}/join`);
-        setToken(resp.data.token);
+        if (!cancelled) {
+          setToken(resp.data.token);
+          setConnectionStatus('connected');
+          onConnectionChange?.('connected');
+
+          // Signal join to global WS
+          if (globalWs?.readyState === WebSocket.OPEN) {
+            globalWs.send(JSON.stringify({
+              type: 'voice_join',
+              channel_id: channel.id,
+              user: user
+            }));
+          }
+        }
       } catch (e) {
-        console.error(e);
+        console.error('Failed to join voice channel:', e);
+        if (!cancelled) {
+          setConnectionStatus('error');
+          onConnectionChange?.('error');
+        }
       }
     };
 
     if (channel.id) {
-        getToken();
+      getToken();
     }
+
+    return () => {
+      cancelled = true;
+      // Signal leave
+      if (globalWs?.readyState === WebSocket.OPEN) {
+        globalWs.send(JSON.stringify({
+          type: 'voice_leave',
+          channel_id: channel.id,
+          user_id: user.id
+        }));
+      }
+    };
   }, [channel.id]);
 
+  const handleDisconnect = useCallback(() => {
+    intentionalDisconnect.current = true;
+    setToken('');
+    setConnectionStatus('disconnected');
+    onConnectionChange?.('disconnected');
+    onDisconnect();
+  }, [onDisconnect, onConnectionChange]);
+
+  const handleLiveKitDisconnected = useCallback(() => {
+    if (intentionalDisconnect.current) return;
+    console.log('LiveKit disconnected unexpectedly');
+    // Don't unmount — keep the component alive for reconnect attempts
+  }, []);
+
+  // Expose disconnect method via ref-like pattern
+  useEffect(() => {
+    // Store handler globally so sidebar can call it
+    window.__voiceDisconnect = handleDisconnect;
+    return () => { delete window.__voiceDisconnect; };
+  }, [handleDisconnect]);
+
   if (!token) {
-    return (
-        <div className="glass-card p-4 rounded-xl flex items-center justify-center h-48">
-             <span className="loading loading-spinner text-primary"></span>
-             <span className="ml-2">Connecting to Voice...</span>
-        </div>
-    );
+    // Still loading or error — render nothing visible
+    return null;
   }
 
   return (
@@ -44,29 +102,64 @@ export default function VoiceArea({ channel }) {
       video={false}
       audio={true}
       token={token}
-      serverUrl={import.meta.env.VITE_LIVEKIT_URL || 'ws://localhost:7880'} // Ensure env var or fallback
-      data-lk-theme="default"
-      style={{ height: '300px' }}
-      className="glass-card rounded-xl overflow-hidden shadow-2xl border border-white/10"
+      serverUrl={import.meta.env.VITE_LIVEKIT_URL || 'ws://localhost:7880'}
+      connect={true}
+      onDisconnected={handleLiveKitDisconnected}
+      style={{ display: 'none' }}
     >
-      <MyVideoConference />
       <RoomAudioRenderer />
-      <ControlBar variation="minimal" />
+      <VoiceControls />
     </LiveKitRoom>
   );
 }
 
-function MyVideoConference() {
-  const tracks = useTracks(
-    [
-      { source: Track.Source.Camera, withPlaceholder: true },
-      { source: Track.Source.ScreenShare, withPlaceholder: false },
-    ],
-    { onlySubscribed: false },
-  );
-  return (
-    <GridLayout tracks={tracks} style={{ height: 'calc(100% - var(--lk-control-bar-height))' }}>
-      <ParticipantTile />
-    </GridLayout>
-  );
+/**
+ * Inner component that exposes mute/deafen controls via window globals
+ * so the sidebar can read/trigger them.
+ */
+function VoiceControls() {
+  const { localParticipant } = useLocalParticipant();
+  const [isMuted, setIsMuted] = useState(false);
+  const [isDeafened, setIsDeafened] = useState(false);
+
+  const toggleMute = useCallback(async () => {
+    if (!localParticipant) return;
+    const newMuted = !isMuted;
+    await localParticipant.setMicrophoneEnabled(!newMuted);
+    setIsMuted(newMuted);
+  }, [localParticipant, isMuted]);
+
+  const toggleDeafen = useCallback(() => {
+    // Deafen = mute audio output (we'll just mute all remote tracks)
+    setIsDeafened(prev => !prev);
+    // When deafening, also mute mic
+    if (!isDeafened && !isMuted) {
+      localParticipant?.setMicrophoneEnabled(false);
+      setIsMuted(true);
+    }
+  }, [localParticipant, isDeafened, isMuted]);
+
+  // Expose to window so sidebar controls can call
+  useEffect(() => {
+    window.__voiceMute = toggleMute;
+    window.__voiceDeafen = toggleDeafen;
+    window.__voiceState = { isMuted, isDeafened };
+    return () => {
+      delete window.__voiceMute;
+      delete window.__voiceDeafen;
+      delete window.__voiceState;
+    };
+  }, [toggleMute, toggleDeafen, isMuted, isDeafened]);
+
+  // Handle deafen - mute all audio elements on page
+  useEffect(() => {
+    const audioElements = document.querySelectorAll('audio');
+    audioElements.forEach(el => {
+      if (el.closest('[data-lk-room]')) {
+        el.muted = isDeafened;
+      }
+    });
+  }, [isDeafened]);
+
+  return null;
 }

@@ -39,7 +39,9 @@ async def websocket_endpoint(
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
 
-        await manager.connect(websocket, str(user.id))
+        await manager.connect(websocket, str(user.id), username=user.username, avatar=user.avatar_url)
+        # Send full presence state to newly connected client
+        await manager.broadcast_full_presence(websocket)
         try:
             while True:
                 data = await websocket.receive_json()
@@ -113,6 +115,37 @@ async def websocket_endpoint(
                     except Exception as e:
                         print(f"Error saving DM: {e}")
                 
+                # Handle voice state
+                elif data.get("type") == "voice_join":
+                    await manager.handle_voice_join(data["channel_id"], data["user"])
+                elif data.get("type") == "voice_leave":
+                    await manager.handle_voice_leave(data["channel_id"], data["user_id"])
+                
+                # Handle typing indicator
+                elif data.get("type") == "typing_start":
+                    channel_id = data.get("channel_id")
+                    recipient_id = data.get("recipient_id")
+                    typing_payload = {
+                        "type": "typing_start",
+                        "user_id": str(user.id),
+                        "username": user.username,
+                        "channel_id": channel_id,
+                        "recipient_id": recipient_id
+                    }
+                    if recipient_id:
+                        # DM typing
+                        await manager.send_personal_message(typing_payload, recipient_id)
+                    elif channel_id:
+                        # Channel typing
+                        await manager.broadcast_to_channel(channel_id, typing_payload)
+
+                # Handle status change
+                elif data.get("type") == "set_status":
+                    new_status = data.get("status", "online")
+                    if new_status in ("online", "idle", "dnd", "invisible"):
+                        manager.user_presence[str(user.id)] = new_status
+                        await manager._broadcast_presence(str(user.id), new_status)
+
                 # Handle call signaling
                 elif data.get("type") in ["call_invite", "call_accept", "call_reject", "call_end"]:
                     target_user_id = data.get("target_user_id")
@@ -124,9 +157,10 @@ async def websocket_endpoint(
                             "from_avatar": user.avatar_url,
                             "room_name": data.get("room_name"),
                             "call_type": data.get("call_type", "video"),
-                            "target_user_id": target_user_id # Echo back for safety
+                            "target_user_id": target_user_id
                         }
                         await manager.send_personal_message(call_payload, target_user_id)
+                    
         except WebSocketDisconnect:
             manager.disconnect(websocket, str(user.id))
         except Exception as e:

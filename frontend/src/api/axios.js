@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: 'http://localhost:8002', // Using port 8002 as confirmed in verification (or 8000 if user restarts)
+  baseURL: `http://${window.location.hostname}:8002`,
   headers: {
     'Content-Type': 'application/json',
   },

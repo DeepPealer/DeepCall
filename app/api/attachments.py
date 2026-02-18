@@ -35,7 +35,7 @@ async def upload_attachment(
     # In production, we would use a CDN or S3 URL
     # For local dev, we use the local server's URL
     return {
-        "url": f"http://localhost:8002/uploads/{file_name}",
+        "url": f"/uploads/{file_name}",
         "filename": file.filename,
         "content_type": file.content_type
     }

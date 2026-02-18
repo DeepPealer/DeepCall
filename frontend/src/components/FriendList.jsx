@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { UserPlus, Check, X, Users } from 'lucide-react';
 import api from '../api/axios';
 
-export default function FriendList({ onSelectFriend, onHoverUser }) {
+export default function FriendList({ onSelectFriend, onHoverUser, onlineUsers = {}, unreadCounts = {} }) {
   const [friends, setFriends] = useState([]);
   const [pending, setPending] = useState([]);
   const [showAddDialog, setShowAddDialog] = useState(false);
@@ -142,19 +142,36 @@ export default function FriendList({ onSelectFriend, onHoverUser }) {
               onClick={() => onSelectFriend && onSelectFriend(friend)}
               className="w-full flex items-center gap-3 p-3 rounded-2xl hover:bg-white/5 transition-all text-left border border-transparent hover:border-white/5"
             >
-              <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center shrink-0 overflow-hidden border border-white/5 shadow-inner">
+              <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center shrink-0 overflow-hidden border border-white/5 shadow-inner relative">
                 {friend.avatar_url ? (
                   <img src={friend.avatar_url} alt={friend.username} className="w-full h-full object-cover" />
                 ) : (
                   <span className="text-primary font-black">{(friend.username || '?')[0].toUpperCase()}</span>
                 )}
+                {unreadCounts?.dms?.[friend.id] > 0 && (
+                  <div className="absolute top-0 right-0 w-3 h-3 bg-red-500 rounded-full border-2 border-surface-800" />
+                )}
               </div>
               <div className="flex-1 min-w-0">
                 <div className="font-bold text-white truncate text-sm">{friend.username}</div>
-                <div className="text-[10px] text-emerald-500 font-bold uppercase tracking-wider flex items-center gap-1.5">
-                   <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
-                   Online
-                </div>
+                {(() => {
+                  const presence = onlineUsers[friend.id];
+                  const status = presence?.status || 'offline';
+                  const colors = {
+                    online: { dot: 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]', text: 'text-emerald-500' },
+                    idle: { dot: 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]', text: 'text-amber-500' },
+                    dnd: { dot: 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]', text: 'text-red-500' },
+                    offline: { dot: 'bg-gray-500', text: 'text-gray-500' }
+                  };
+                  const c = colors[status] || colors.offline;
+                  const label = status === 'dnd' ? 'Do Not Disturb' : status.charAt(0).toUpperCase() + status.slice(1);
+                  return (
+                    <div className={`text-[10px] ${c.text} font-bold uppercase tracking-wider flex items-center gap-1.5`}>
+                      <div className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
+                      {label}
+                    </div>
+                  );
+                })()}
               </div>
             </button>
           </motion.div>

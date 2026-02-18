@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api import auth, websockets, channels, friends, dms, servers, users, attachments, livekit, moderation, invites
+from app.api import auth, websockets, channels, friends, dms, servers, users, attachments, livekit, moderation, invites, read_states
 
 api_router = APIRouter()
 
@@ -14,4 +14,5 @@ api_router.include_router(attachments.router, prefix="/attachments", tags=["atta
 api_router.include_router(livekit.router, prefix="/livekit", tags=["livekit"])
 api_router.include_router(moderation.router, prefix="/moderation", tags=["moderation"])
 api_router.include_router(invites.router, tags=["invites"])
+api_router.include_router(read_states.router, prefix="/read-states", tags=["read-states"])
 
